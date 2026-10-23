@@ -11,17 +11,21 @@ export default async function handler(req, res) {
 
   if (!apiKey) {
     return res.status(500).json({
-      error: "OPENAI_API_KEY is missing in Vercel."
+      error: "GEMINI_API_KEY is missing in Vercel."
     });
   }
 
   try {
     const body = req.body || {};
     const message =
-      typeof body.message === "string" ? body.message.trim() : "";
+      typeof body.message === "string"
+        ? body.message.trim()
+        : "";
 
     if (!message) {
-      return res.status(400).json({ error: "Message is required." });
+      return res.status(400).json({
+        error: "Message is required."
+      });
     }
 
     const history = Array.isArray(body.history)
@@ -29,38 +33,41 @@ export default async function handler(req, res) {
           .slice(-8)
           .filter(function (item) {
             return item &&
-              ["user", "assistant"].includes(item.role) &&
+              ["user", "assistant", "model"].includes(item.role) &&
               typeof item.content === "string";
           })
           .map(function (item) {
             return {
-              role: item.role,
-              content: item.content.slice(0, 4000)
+              role: item.role === "assistant" ? "model" : item.role,
+              parts: [{ text: item.content.slice(0, 4000) }]
             };
           })
       : [];
 
-    const input = [
-      {
-        role: "developer",
-        content: "You are JARVIS, a helpful personal AI assistant. Be clear, practical, and concise. Never claim to control the phone or have live data unless a connected feature actually supports it."
-      },
-      ...history,
-      { role: "user", content: message }
-    ];
-
     const response = await fetch(
-      "https://api.openai.com/v1/responses",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       {
         method: "POST",
         headers: {
-          "Authorization": "Bearer " + apiKey,
+          "x-goog-api-key": apiKey,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-          input: input,
-          max_output_tokens: 700
+          systemInstruction: {
+            parts: [{
+              text: "You are JARVIS, a helpful personal AI assistant. Be practical, clear, and concise. Never claim to control the phone or access live data unless a connected feature supports it."
+            }]
+          },
+          contents: [
+            ...history,
+            {
+              role: "user",
+              parts: [{ text: message }]
+            }
+          ],
+          generationConfig: {
+            maxOutputTokens: 700
+          }
         })
       }
     );
@@ -69,33 +76,44 @@ export default async function handler(req, res) {
 
     if (!response.ok) {
       console.error(
-        "OpenAI request failed with status:",
-        response.status
+        "Gemini API error:",
+        response.status,
+        data.error?.status || "unknown",
+        data.error?.message || "No details"
       );
 
       return res.status(502).json({
-        error: "AI provider request failed. Check Vercel logs and API billing."
+        error: "Gemini request failed. Check Vercel logs for details."
       });
     }
 
-    const reply =
-      typeof data.output_text === "string"
-        ? data.output_text.trim()
-        : "";
+    const reply = (
+      data.candidates?.[0]?.content?.parts || []
+    )
+      .map(function (part) {
+        return part.text || "";
+      })
+      .join("")
+      .trim();
 
     if (!reply) {
+      console.error(
+        "Gemini returned no text. Finish reason:",
+        data.candidates?.[0]?.finishReason || "unknown"
+      );
+
       return res.status(502).json({
-        error: "The AI returned no text."
+        error: "Gemini returned no text. Check Vercel logs."
       });
     }
 
-    return res.status(200).json({ reply: reply });
+    return res.status(200).json({ reply });
 
   } catch (error) {
     console.error("JARVIS backend error:", error.message);
 
     return res.status(500).json({
-      error: "Server error while contacting the AI service."
+      error: "Server error while contacting Gemini."
     });
   }
 }
